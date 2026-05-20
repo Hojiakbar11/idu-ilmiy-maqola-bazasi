@@ -13,7 +13,10 @@ import {
   X, 
   CheckCircle,
   FileCheck2,
-  BookMarked
+  BookMarked,
+  Search,
+  Pencil,
+  Trash2
 } from 'lucide-react';
 
 function App() {
@@ -36,6 +39,16 @@ function App() {
   const [isUploading, setIsUploading] = useState(false);
   const [toastMessage, setToastMessage] = useState('');
   const [toastType, setToastType] = useState(''); // 'success' or 'error'
+
+  // Search and Filter states
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedYear, setSelectedYear] = useState('');
+  const [selectedJournal, setSelectedJournal] = useState('');
+
+  // Edit states
+  const [editingArticle, setEditingArticle] = useState(null);
+
+
 
 
   // Close modal on Escape key press
@@ -73,6 +86,17 @@ function App() {
     }
   }, [isLoggedIn]);
 
+  // Dynamic filter values
+  const availableYears = [...new Set(articles.map(a => a.publication_year))].filter(Boolean).sort((a, b) => b - a);
+  const availableJournals = [...new Set(articles.map(a => a.journal_name))].filter(Boolean).sort();
+
+  const filteredArticles = articles.filter(article => {
+    const matchesSearch = article.title.toLowerCase().includes(searchQuery.toLowerCase());
+    const matchesYear = selectedYear ? String(article.publication_year) === selectedYear : true;
+    const matchesJournal = selectedJournal ? article.journal_name === selectedJournal : true;
+    return matchesSearch && matchesYear && matchesJournal;
+  });
+
   // Clear toast message after 4s
   React.useEffect(() => {
     if (toastMessage) {
@@ -80,6 +104,7 @@ function App() {
       return () => clearTimeout(timer);
     }
   }, [toastMessage]);
+
 
   const handleLogin = () => {
     setIsLoggedIn(true);
@@ -91,46 +116,124 @@ function App() {
     setActiveTab('asosiy');
   };
 
+  const openUploadModal = () => {
+    setEditingArticle(null);
+    setNewTitle('');
+    setNewYear('');
+    setNewJournal('');
+    setNewPages('');
+    setNewCoAuthors('');
+    setSelectedFile(null);
+    setFileName('');
+    setShowUploadModal(true);
+  };
+
+  const handleEditClick = (article) => {
+    setEditingArticle(article);
+    setNewTitle(article.title);
+    setNewYear(article.publication_year);
+    setNewJournal(article.journal_name || '');
+    setNewPages(article.pages || '');
+    setNewCoAuthors(article.co_authors || '');
+    setFileName(article.file_url ? 'Mavjud fayl yuklangan' : '');
+    setSelectedFile(null);
+    setShowUploadModal(true);
+  };
+
+  const handleDeleteClick = async (articleId) => {
+    if (window.confirm("Haqiqatan ham ushbu maqolani o'chirmoqchimisiz?")) {
+      try {
+        const { error } = await supabase
+          .from('articles')
+          .delete()
+          .eq('id', articleId);
+        
+        if (error) throw error;
+        
+        setToastMessage("Maqola muvaffaqiyatli o'chirildi!");
+        setToastType("success");
+        fetchArticles();
+      } catch (err) {
+        console.error(err);
+        setToastMessage(`O'chirishda xatolik: ${err.message}`);
+        setToastType("error");
+      }
+    }
+  };
+
+
   const handleUploadSubmit = async (e) => {
     e.preventDefault();
-    if (!newTitle || !newYear || !selectedFile) {
-      setToastMessage("Iltimos, maqola nomi, yili va faylini tanlang!");
+    
+    if (!newTitle || !newYear) {
+      setToastMessage("Iltimos, maqola nomi va chop etilgan yilini kiriting!");
+      setToastType("error");
+      return;
+    }
+    if (!editingArticle && !selectedFile) {
+      setToastMessage("Iltimos, yuklash uchun faylni tanlang!");
       setToastType("error");
       return;
     }
 
     setIsUploading(true);
     try {
-      // 1. Upload file to Supabase Storage bucket 'articles'
-      const fileExt = selectedFile.name.split('.').pop();
-      const filePath = `${Date.now()}_${Math.random().toString(36).substring(7)}.${fileExt}`;
+      let finalFileUrl = editingArticle ? editingArticle.file_url : '';
 
-      const { error: uploadError } = await supabase.storage
-        .from('articles')
-        .upload(filePath, selectedFile);
+      // Upload file if selected
+      if (selectedFile) {
+        const fileExt = selectedFile.name.split('.').pop();
+        const filePath = `${Date.now()}_${Math.random().toString(36).substring(7)}.${fileExt}`;
 
-      if (uploadError) throw uploadError;
+        const { error: uploadError } = await supabase.storage
+          .from('articles')
+          .upload(filePath, selectedFile);
 
-      // 2. Get Public URL
-      const { data: { publicUrl } } = supabase.storage
-        .from('articles')
-        .getPublicUrl(filePath);
+        if (uploadError) throw uploadError;
 
-      // 3. Insert into Database Table
-      const { error: insertError } = await supabase
-        .from('articles')
-        .insert([
-          {
+        const { data: { publicUrl } } = supabase.storage
+          .from('articles')
+          .getPublicUrl(filePath);
+
+        finalFileUrl = publicUrl;
+      }
+
+      if (editingArticle) {
+        // Update database row
+        const { error: updateError } = await supabase
+          .from('articles')
+          .update({
             title: newTitle,
             publication_year: parseInt(newYear) || 2026,
             journal_name: newJournal,
             pages: newPages,
             co_authors: newCoAuthors,
-            file_url: publicUrl
-          }
-        ]);
+            file_url: finalFileUrl
+          })
+          .eq('id', editingArticle.id);
 
-      if (insertError) throw insertError;
+        if (updateError) throw updateError;
+        setToastMessage("Maqola muvaffaqiyatli tahrirlandi!");
+      } else {
+        // Insert database row
+        const { error: insertError } = await supabase
+          .from('articles')
+          .insert([
+            {
+              title: newTitle,
+              publication_year: parseInt(newYear) || 2026,
+              journal_name: newJournal,
+              pages: newPages,
+              co_authors: newCoAuthors,
+              file_url: finalFileUrl
+            }
+          ]);
+
+        if (insertError) throw insertError;
+        setToastMessage("Maqola muvaffaqiyatli yuklandi va saqlandi!");
+      }
+
+      setToastType("success");
 
       // Reset form and close modal
       setNewTitle('');
@@ -140,11 +243,8 @@ function App() {
       setNewCoAuthors('');
       setSelectedFile(null);
       setFileName('');
+      setEditingArticle(null);
       setShowUploadModal(false);
-
-      // Show success toast
-      setToastMessage("Maqola muvaffaqiyatli yuklandi va saqlandi!");
-      setToastType("success");
 
       // Refresh database articles
       fetchArticles();
@@ -156,6 +256,7 @@ function App() {
       setIsUploading(false);
     }
   };
+
 
   // Drag and drop helper functions
   const handleDrag = (e) => {
@@ -350,12 +451,13 @@ function App() {
                     <p className="text-slate-500 mt-1">Ilmiy ishlaringiz bazasiga xush kelibsiz. Maqolalaringizni shu erda boshqarishingiz mumkin.</p>
                   </div>
                   <button 
-                    onClick={() => setShowUploadModal(true)}
+                    onClick={openUploadModal}
                     className="inline-flex items-center justify-center space-x-2 bg-blue-600 hover:bg-blue-700 text-white font-semibold px-6 py-3 rounded-xl shadow-md hover:shadow-lg transition-all"
                   >
                     <Plus className="w-5 h-5" />
                     <span>Yangi maqola yuklash</span>
                   </button>
+
                 </div>
 
                 {/* Stats Cards */}
@@ -431,15 +533,62 @@ function App() {
                   </button>
                 </div>
 
+                {/* Qidiruv va Filtrlar */}
+                <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 flex flex-col md:flex-row gap-4 items-center justify-between">
+                  <div className="relative w-full md:flex-1">
+                    <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 w-5 h-5" />
+                    <input 
+                      type="text"
+                      placeholder="Maqola nomi bo'yicha qidirish..."
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      className="w-full pl-11 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
+                    />
+                  </div>
+                  <div className="flex gap-4 w-full md:w-auto">
+                    <div className="relative flex-1 md:flex-initial">
+                      <select 
+                        value={selectedYear}
+                        onChange={(e) => setSelectedYear(e.target.value)}
+                        className="w-full md:w-44 bg-slate-50 border border-slate-200 text-slate-700 py-3 px-4 pr-10 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 appearance-none cursor-pointer font-medium"
+                      >
+                        <option value="">Chop etilgan yili</option>
+                        {availableYears.map(year => (
+                          <option key={year} value={year}>{year}-yil</option>
+                        ))}
+                      </select>
+                      <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400">
+                        <Calendar className="w-4 h-4" />
+                      </div>
+                    </div>
+
+                    <div className="relative flex-1 md:flex-initial">
+                      <select 
+                        value={selectedJournal}
+                        onChange={(e) => setSelectedJournal(e.target.value)}
+                        className="w-full md:w-48 bg-slate-50 border border-slate-200 text-slate-700 py-3 px-4 pr-10 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 appearance-none cursor-pointer font-medium truncate"
+                      >
+                        <option value="">Jurnal nomi</option>
+                        {availableJournals.map(journal => (
+                          <option key={journal} value={journal}>{journal}</option>
+                        ))}
+                      </select>
+                      <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400">
+                        <BookOpen className="w-4 h-4" />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
                 {/* All Articles List */}
                 <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-6 sm:p-8">
-                  {articles.length === 0 ? (
+                  {filteredArticles.length === 0 ? (
                     <div className="text-center py-12">
-                      <p className="text-slate-400">Hozircha hech qanday maqola mavjud emas.</p>
+                      <p className="text-slate-400">Hech qanday mos keluvchi maqola topilmadi.</p>
                     </div>
                   ) : (
                     <div className="space-y-4">
-                      {articles.map((article) => (
+                      {filteredArticles.map((article) => (
                         <div 
                           key={article.id}
                           className="flex items-center justify-between p-4 bg-slate-50 hover:bg-blue-50/40 border border-slate-100 hover:border-blue-100/50 rounded-xl transition-all group"
@@ -448,17 +597,48 @@ function App() {
                             <h4 className="font-bold text-slate-900 group-hover:text-blue-900 transition-colors text-sm sm:text-base leading-snug">
                               {article.title}
                             </h4>
-                            <p className="text-xs sm:text-sm text-slate-400 font-medium">{article.publication_year}-yil</p>
+                            <div className="flex flex-wrap items-center gap-2 text-xs sm:text-sm text-slate-400 font-medium">
+                              <span>{article.publication_year}-yil</span>
+                              {article.journal_name && (
+                                <>
+                                  <span>•</span>
+                                  <span className="text-blue-600 bg-blue-50 px-2 py-0.5 rounded-md font-semibold text-xs">{article.journal_name}</span>
+                                </>
+                              )}
+                              {article.co_authors && (
+                                <>
+                                  <span>•</span>
+                                  <span>Mualliflar: {article.co_authors}</span>
+                                </>
+                              )}
+                            </div>
                           </div>
-                          <a 
-                            href={article.file_url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="bg-white text-slate-600 hover:text-blue-600 hover:bg-blue-50 p-2.5 rounded-lg border border-slate-200 hover:border-blue-200 transition-all flex-shrink-0"
-                            title="Faylni yuklab olish"
-                          >
-                            <Download className="w-5 h-5" />
-                          </a>
+                          
+                          <div className="flex items-center space-x-2 flex-shrink-0">
+                            <a 
+                              href={article.file_url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="bg-white text-slate-600 hover:text-blue-600 hover:bg-blue-50 p-2.5 rounded-lg border border-slate-200 hover:border-blue-200 transition-all"
+                              title="Faylni yuklab olish"
+                            >
+                              <Download className="w-5 h-5" />
+                            </a>
+                            <button
+                              onClick={() => handleEditClick(article)}
+                              className="bg-white text-slate-600 hover:text-amber-600 hover:bg-amber-50 p-2.5 rounded-lg border border-slate-200 hover:border-amber-200 transition-all"
+                              title="Tahrirlash"
+                            >
+                              <Pencil className="w-5 h-5" />
+                            </button>
+                            <button
+                              onClick={() => handleDeleteClick(article.id)}
+                              className="bg-white text-slate-600 hover:text-red-600 hover:bg-red-50 p-2.5 rounded-lg border border-slate-200 hover:border-red-200 transition-all"
+                              title="O'chirish"
+                            >
+                              <Trash2 className="w-5 h-5" />
+                            </button>
+                          </div>
                         </div>
                       ))}
                     </div>
@@ -466,6 +646,8 @@ function App() {
                 </div>
               </div>
             )}
+
+
           </main>
         </div>
       )}
@@ -488,13 +670,18 @@ function App() {
                 <X className="w-5 h-5" />
               </button>
 
-              <h3 className="text-xl font-bold text-slate-950 mb-6">Maqola yuklash</h3>
+              <h3 className="text-xl font-bold text-slate-950 mb-6">
+                {editingArticle ? "Maqolani tahrirlash" : "Maqola yuklash"}
+              </h3>
 
               <form onSubmit={handleUploadSubmit} className="space-y-6">
                 
                 {/* Drag and Drop Zone */}
                 <div>
-                  <label htmlFor="file-upload" className="block text-sm font-semibold text-slate-700 mb-2">Hujjat faylini tanlang</label>
+                  <label htmlFor="file-upload" className="block text-sm font-semibold text-slate-700 mb-2">
+                    {editingArticle ? "Yangi fayl yuklash (Majburiy emas)" : "Hujjat faylini tanlang"}
+                  </label>
+
                   <div 
                     onDragEnter={handleDrag}
                     onDragOver={handleDrag}
